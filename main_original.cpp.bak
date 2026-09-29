@@ -1,0 +1,107 @@
+#include <Arduino.h>
+#include <TFT_eSPI.h>
+#include <Bluepad32.h>
+
+// Instância do Display ST7789
+TFT_eSPI tft = TFT_eSPI();
+
+// Ponteiro para o controle Bluetooth (seu Ace Gamer Pocket)
+GamepadPtr myGamepad = nullptr;
+
+// Variáveis para armazenar o estado dos botões para o emulador
+uint8_t nes_buttons = 0; 
+
+// --- CALLBACKS DO BLUEPAD32 ---
+void onConnectedController(GamepadPtr gp) {
+  if (myGamepad == nullptr) {
+    Serial.println("Controle Ace Gamer conectado!");
+    myGamepad = gp;
+  }
+}
+
+void onDisconnectedController(GamepadPtr gp) {
+  if (myGamepad == gp) {
+    Serial.println("Controle desconectado!");
+    myGamepad = nullptr;
+  }
+}
+
+// --- TAREFA DO NÚCLEO 0 (BLUETOOTH) ---
+void taskBluetooth(void *pvParameters) {
+  
+  // 1. FORÇA O ESP32 A ESQUECER QUALQUER CHAVE CORROMPIDA
+  BP32.forgetBluetoothKeys();
+
+  // 2. Inicializa o Bluepad32
+  BP32.setup(&onConnectedController, &onDisconnectedController);
+  BP32.enableVirtualDevice(false);
+  
+  while (true) {
+    BP32.update();
+    
+    if (myGamepad && myGamepad->isConnected()) {
+      // Mapeia os botões do Ace Gamer
+      nes_buttons = 0;
+      if (myGamepad->a()) nes_buttons |= (1 << 0);
+      if (myGamepad->b()) nes_buttons |= (1 << 1);
+      if (myGamepad->miscButtons() & MISC_BUTTON_BACK) nes_buttons |= (1 << 2);
+      if (myGamepad->miscButtons() & MISC_BUTTON_HOME) nes_buttons |= (1 << 3);
+      if (myGamepad->dpad() & DPAD_UP) nes_buttons |= (1 << 4);
+      if (myGamepad->dpad() & DPAD_DOWN) nes_buttons |= (1 << 5);
+      if (myGamepad->dpad() & DPAD_LEFT) nes_buttons |= (1 << 6);
+      if (myGamepad->dpad() & DPAD_RIGHT) nes_buttons |= (1 << 7);
+    }
+    
+    // Pausa leve para não travar o Core 0
+    vTaskDelay(10 / portTICK_PERIOD_MS); 
+  }
+}
+
+// --- CONFIGURAÇÃO INICIAL ---
+void setup() {
+  Serial.begin(115200);
+
+  // Inicializa a Tela 1.14" ST7789
+  tft.init();
+  tft.setRotation(1); // Modo paisagem (240x135)
+  tft.fillScreen(TFT_BLACK);
+  tft.setTextColor(TFT_WHITE);
+  tft.setCursor(10, 10);
+  tft.println("Iniciando ESP32 NES...");
+  tft.println("Aguardando Ace Gamer Pocket...");
+
+  // Inicia a tarefa do Bluetooth no Núcleo 0
+  xTaskCreatePinnedToCore(
+    taskBluetooth,   /* Função da tarefa */
+    "TaskBluetooth", /* Nome */
+    10000,           /* Tamanho da pilha (stack) */
+    NULL,            /* Parâmetros */
+    1,               /* Prioridade */
+    NULL,            /* Handle */
+    0                /* Núcleo (Core 0) */
+  );
+
+  delay(2000); // Tempo para ler a mensagem na tela
+
+  // Aqui você chamaria a inicialização do núcleo do NES (ex: nofrendo_init())
+  // nofrendo_init();
+}
+
+// --- LOOP PRINCIPAL (NÚCLEO 1 - EMULADOR E VÍDEO) ---
+void loop() {
+  // Aqui roda o ciclo principal do emulador.
+  // O motor do NES vai ler a variável 'nes_buttons' atualizada pelo Core 0 em tempo real
+  // e vai desenhar as linhas (scanlines) diretamente na 'tft'.
+  
+  // Exemplo de chamada:
+  // nofrendo_loop();
+  
+  // Apenas para feedback visual antes de embutir o motor do NES:
+  if (myGamepad && myGamepad->isConnected()) {
+      tft.fillScreen(TFT_BLACK);
+      tft.setCursor(10, 60);
+      tft.print("Botoes Pressionados: ");
+      tft.println(nes_buttons, BIN);
+  }
+  delay(16); // Aproximadamente 60 FPS
+}
